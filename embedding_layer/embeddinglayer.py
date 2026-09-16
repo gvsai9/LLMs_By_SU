@@ -3,11 +3,11 @@ import torch.nn as nn
 
 
 class EmbeddingLayer(nn.Module):
-    def __init__(self, vocab_size, embedding_dim):
+    def __init__(self, vocab_size, d_model):
         super().__init__()
 
         self.weight = nn.Parameter(
-            torch.randn(vocab_size, embedding_dim)
+            torch.randn(vocab_size, d_model)
         )
 
     def forward(self, x):

@@ -1,0 +1,4 @@
+The transformer model learns patterns from text.
+Attention allows tokens to interact with other tokens.
+Language models predict the next token in a sequence.
+Machine learning models learn useful representations from data.
