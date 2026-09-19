@@ -1,4 +1,5 @@
 import math
+import os
 import time
 
 import torch
@@ -30,6 +31,11 @@ BATCH_SIZE = 8
 
 LEARNING_RATE = 3e-4
 NUM_STEPS = 100
+
+CHECKPOINT_DIR = "checkpoints"
+SAVE_EVERY = 100
+
+LOG_EVERY = 10
 
 DEVICE = (
     "cuda"
@@ -64,6 +70,16 @@ print("Device           :", DEVICE)
 
 train_data = train_data.to(DEVICE)
 val_data = val_data.to(DEVICE)
+
+
+# ============================================================
+# Create checkpoint directory
+# ============================================================
+
+os.makedirs(
+    CHECKPOINT_DIR,
+    exist_ok=True,
+)
 
 
 # ============================================================
@@ -197,7 +213,7 @@ for step in range(NUM_STEPS):
     # Logging
     # --------------------------------------------------------
 
-    if step % 1 == 0:
+    if (step + 1) % LOG_EVERY == 0 or step == 0:
 
         train_loss = loss.item()
 
@@ -272,4 +288,29 @@ for step in range(NUM_STEPS):
             f"Speed: {steps_per_second:.2f} step/s | "
             f"ETA: {remaining_minutes:.1f} min | "
             f"GPU: {gpu_memory_text}"
+        )
+
+    # --------------------------------------------------------
+    # Save checkpoint
+    # --------------------------------------------------------
+
+    if (step + 1) % SAVE_EVERY == 0:
+
+        checkpoint_path = os.path.join(
+            CHECKPOINT_DIR,
+            f"checkpoint_step_{step + 1}.pt",
+        )
+
+        torch.save(
+            {
+                "step": step + 1,
+                "model_state_dict": model.state_dict(),
+                "optimizer_state_dict": optimizer.state_dict(),
+                "loss": loss.item(),
+            },
+            checkpoint_path,
+        )
+
+        print(
+            f"Checkpoint saved: {checkpoint_path}"
         )
