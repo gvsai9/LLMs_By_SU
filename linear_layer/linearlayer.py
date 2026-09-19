@@ -14,12 +14,13 @@ class LinearLayer(nn.Module):
 
     def forward(self, x):
         return x @ self.weights.T
-layer = LinearLayer(3, 2)
-x = torch.randn(4, 3)
+if __name__ == "__main__":
+    layer = LinearLayer(3, 2)
+    x = torch.randn(4, 3)
 
-y = layer(x)
+    y = layer(x)
 
-print(layer.weights.shape)
-print(x.shape)
-print(y.shape)
-print(list(layer.parameters()))
+    print(layer.weights.shape)
+    print(x.shape)
+    print(y.shape)
+    print(list(layer.parameters()))

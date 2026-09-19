@@ -1,111 +1,293 @@
+import math
+import time
+
 import torch
 import torch.nn as nn
 
-from data.tokenizer import CharacterTokenizer
-from data.dataset import create_batch
+from tokenizer.tokenizer import Tokenizer
+from data.dataset import load_tokenized_data, create_batch
 from transformer.transformer_lm import TransformerLM
 
 
-# -----------------------------------------
-# 1. Load training text
-# -----------------------------------------
+# ============================================================
+# Configuration
+# ============================================================
 
-with open("data/train.txt", "r", encoding="utf-8") as f:
-    text = f.read()
+TEXT_PATH = "data/train.txt"
+VOCAB_PATH = "data/vocab.json"
+MERGES_PATH = "data/merges.txt"
 
+SPECIAL_TOKENS = []
 
-# -----------------------------------------
-# 2. Create tokenizer
-# -----------------------------------------
+D_MODEL = 128
+NUM_LAYERS = 4
+NUM_HEADS = 4
+D_FF = 512
 
-tokenizer = CharacterTokenizer(text)
+NUM_EXPERTS = 4
+TOP_K = 2
 
-vocab_size = tokenizer.vocab_size
+BLOCK_SIZE = 128
+BATCH_SIZE = 8
 
-data = torch.tensor(
-    tokenizer.encode(text),
-    dtype=torch.long
+LEARNING_RATE = 3e-4
+NUM_STEPS = 10
+
+TRAIN_RATIO = 0.9
+
+DEVICE = (
+    "cuda"
+    if torch.cuda.is_available()
+    else "cpu"
 )
 
 
-# -----------------------------------------
-# 3. Model configuration
-# -----------------------------------------
+# ============================================================
+# Load BPE tokenizer
+# ============================================================
 
-d_model = 8
-num_layers = 2
-num_heads = 2
-d_ff = 32
-
-num_experts = 4
-top_k = 2
-
-block_size = 16
-batch_size = 4
+tokenizer = Tokenizer.from_files(
+    vocab_filepath=VOCAB_PATH,
+    merges_filepath=MERGES_PATH,
+    special_tokens=SPECIAL_TOKENS,
+)
 
 
-# -----------------------------------------
-# 4. Create model
-# -----------------------------------------
+# ============================================================
+# Tokenize dataset
+# ============================================================
+
+train_data, val_data = load_tokenized_data(
+    text_path=TEXT_PATH,
+    tokenizer=tokenizer,
+    train_ratio=TRAIN_RATIO,
+)
+
+vocab_size = len(tokenizer.vocab)
+
+
+print("=" * 60)
+print("DATASET")
+print("=" * 60)
+
+print("Vocabulary size  :", vocab_size)
+print("Train tokens     :", len(train_data))
+print("Validation tokens:", len(val_data))
+print("Device           :", DEVICE)
+
+
+# ============================================================
+# Move data to device
+# ============================================================
+
+train_data = train_data.to(DEVICE)
+val_data = val_data.to(DEVICE)
+
+
+# ============================================================
+# Create model
+# ============================================================
 
 model = TransformerLM(
     vocab_size=vocab_size,
-    d_model=d_model,
-    num_layers=num_layers,
-    num_heads=num_heads,
-    d_ff=d_ff,
-    num_experts=num_experts,
-    top_k=top_k
+    d_model=D_MODEL,
+    num_layers=NUM_LAYERS,
+    num_heads=NUM_HEADS,
+    d_ff=D_FF,
+    num_experts=NUM_EXPERTS,
+    top_k=TOP_K,
 )
 
+model = model.to(DEVICE)
 
-# -----------------------------------------
-# 5. Loss + optimizer
-# -----------------------------------------
+
+# ============================================================
+# Loss + optimizer
+# ============================================================
 
 loss_fn = nn.CrossEntropyLoss()
 
 optimizer = torch.optim.AdamW(
     model.parameters(),
-    lr=1e-3
+    lr=LEARNING_RATE,
 )
 
 
-# -----------------------------------------
-# 6. Training loop
-# -----------------------------------------
+# ============================================================
+# Parameter count
+# ============================================================
 
-num_steps = 200
+num_parameters = sum(
+    parameter.numel()
+    for parameter in model.parameters()
+)
 
-for step in range(num_steps):
+print("Parameters       :", num_parameters)
 
-    # Create a fresh random batch
+
+# ============================================================
+# Validation
+# ============================================================
+
+@torch.no_grad()
+def evaluate(
+    model,
+    data,
+    batch_size,
+    block_size,
+):
+    model.eval()
+
     inputs, targets = create_batch(
         data,
         batch_size=batch_size,
-        block_size=block_size
+        block_size=block_size,
     )
 
-    # Clear old gradients
-    optimizer.zero_grad()
-
-    # Forward pass
     logits = model(inputs)
 
-    # Calculate loss
     loss = loss_fn(
         logits.reshape(-1, vocab_size),
-        targets.reshape(-1)
+        targets.reshape(-1),
     )
 
+    model.train()
+
+    return loss.item()
+
+
+# ============================================================
+# Training
+# ============================================================
+
+model.train()
+
+start_time = time.time()
+
+for step in range(NUM_STEPS):
+
+    # --------------------------------------------------------
+    # Get training batch
+    # --------------------------------------------------------
+
+    inputs, targets = create_batch(
+        train_data,
+        batch_size=BATCH_SIZE,
+        block_size=BLOCK_SIZE,
+    )
+
+    # --------------------------------------------------------
+    # Forward pass
+    # --------------------------------------------------------
+
+    optimizer.zero_grad()
+
+    logits = model(inputs)
+
+    # logits:
+    # (B, T, vocab_size)
+
+    # targets:
+    # (B, T)
+
+    # --------------------------------------------------------
+    # Cross-entropy loss
+    # --------------------------------------------------------
+
+    loss = loss_fn(
+        logits.reshape(-1, vocab_size),
+        targets.reshape(-1),
+    )
+
+    # --------------------------------------------------------
     # Backpropagation
+    # --------------------------------------------------------
+
     loss.backward()
 
-    # Update parameters
+    # --------------------------------------------------------
+    # AdamW parameter update
+    # --------------------------------------------------------
+
     optimizer.step()
 
-    # Print progress
-    if step % 20 == 0:
+    # --------------------------------------------------------
+    # Logging
+    # --------------------------------------------------------
+
+    if step % 1 == 0:
+
+        train_loss = loss.item()
+
+        val_loss = evaluate(
+            model,
+            val_data,
+            batch_size=BATCH_SIZE,
+            block_size=BLOCK_SIZE,
+        )
+
+        # ----------------------------------------------------
+        # Perplexity
+        # ----------------------------------------------------
+
+        val_perplexity = math.exp(val_loss)
+
+        # ----------------------------------------------------
+        # Timing
+        # ----------------------------------------------------
+
+        elapsed = time.time() - start_time
+
+        progress = (
+            (step + 1) / NUM_STEPS
+        ) * 100
+
+        steps_per_second = (
+            (step + 1) / elapsed
+        )
+
+        remaining_steps = (
+            NUM_STEPS - (step + 1)
+        )
+
+        remaining_seconds = (
+            remaining_steps / steps_per_second
+        )
+
+        remaining_minutes = (
+            remaining_seconds / 60
+        )
+
+        # ----------------------------------------------------
+        # GPU memory
+        # ----------------------------------------------------
+
+        if DEVICE == "cuda":
+
+            gpu_memory = (
+                torch.cuda.memory_allocated()
+                / 1024**3
+            )
+
+            gpu_memory_text = (
+                f"{gpu_memory:.2f} GB"
+            )
+
+        else:
+
+            gpu_memory_text = "N/A"
+
+        # ----------------------------------------------------
+        # Print progress
+        # ----------------------------------------------------
+
         print(
-            f"Step {step:3d} | Loss: {loss.item():.4f}"
+            f"Step {step + 1:4d}/{NUM_STEPS} "
+            f"({progress:5.1f}%) | "
+            f"Train Loss: {train_loss:.4f} | "
+            f"Val Loss: {val_loss:.4f} | "
+            f"PPL: {val_perplexity:.2f} | "
+            f"Speed: {steps_per_second:.2f} step/s | "
+            f"ETA: {remaining_minutes:.1f} min | "
+            f"GPU: {gpu_memory_text}"
         )
