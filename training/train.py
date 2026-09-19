@@ -4,8 +4,7 @@ import time
 import torch
 import torch.nn as nn
 
-from tokenizer.tokenizer import Tokenizer
-from data.dataset import load_tokenized_data, create_batch
+from data.dataset import create_batch
 from transformer.transformer_lm import TransformerLM
 
 
@@ -13,11 +12,10 @@ from transformer.transformer_lm import TransformerLM
 # Configuration
 # ============================================================
 
-TEXT_PATH = "data/train.txt"
-VOCAB_PATH = "data/vocab.json"
-MERGES_PATH = "data/merges.txt"
+TRAIN_DATA_PATH = "data/train_tokens.pt"
+VAL_DATA_PATH = "data/val_tokens.pt"
 
-SPECIAL_TOKENS = []
+VOCAB_SIZE = 1000
 
 D_MODEL = 128
 NUM_LAYERS = 4
@@ -33,8 +31,6 @@ BATCH_SIZE = 8
 LEARNING_RATE = 3e-4
 NUM_STEPS = 10
 
-TRAIN_RATIO = 0.9
-
 DEVICE = (
     "cuda"
     if torch.cuda.is_available()
@@ -43,27 +39,13 @@ DEVICE = (
 
 
 # ============================================================
-# Load BPE tokenizer
+# Load pre-tokenized dataset
 # ============================================================
 
-tokenizer = Tokenizer.from_files(
-    vocab_filepath=VOCAB_PATH,
-    merges_filepath=MERGES_PATH,
-    special_tokens=SPECIAL_TOKENS,
-)
+train_data = torch.load(TRAIN_DATA_PATH)
+val_data = torch.load(VAL_DATA_PATH)
 
-
-# ============================================================
-# Tokenize dataset
-# ============================================================
-
-train_data, val_data = load_tokenized_data(
-    text_path=TEXT_PATH,
-    tokenizer=tokenizer,
-    train_ratio=TRAIN_RATIO,
-)
-
-vocab_size = len(tokenizer.vocab)
+vocab_size = VOCAB_SIZE
 
 
 print("=" * 60)
