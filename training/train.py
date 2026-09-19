@@ -30,10 +30,10 @@ BLOCK_SIZE = 128
 BATCH_SIZE = 8
 
 LEARNING_RATE = 3e-4
-NUM_STEPS = 100
+NUM_STEPS = 10000
 
 CHECKPOINT_DIR = "checkpoints"
-SAVE_EVERY = 100
+SAVE_EVERY = 1000
 
 LOG_EVERY = 10
 
@@ -314,3 +314,30 @@ for step in range(NUM_STEPS):
         print(
             f"Checkpoint saved: {checkpoint_path}"
         )
+
+
+# ============================================================
+# Final checkpoint
+# ============================================================
+
+final_checkpoint_path = os.path.join(
+    CHECKPOINT_DIR,
+    "final_checkpoint.pt",
+)
+
+torch.save(
+    {
+        "step": NUM_STEPS,
+        "model_state_dict": model.state_dict(),
+        "optimizer_state_dict": optimizer.state_dict(),
+        "loss": loss.item(),
+    },
+    final_checkpoint_path,
+)
+
+print()
+print("=" * 60)
+print("TRAINING COMPLETE")
+print("=" * 60)
+print("Final checkpoint:", final_checkpoint_path)
+print("Final loss      :", loss.item())
