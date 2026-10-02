@@ -18,14 +18,20 @@ class MoEFNN(nn.Module):
         self.num_experts = num_experts
         self.top_k = top_k
 
+        # ====================================================
         # Router
+        # ====================================================
+
         self.router = nn.Linear(
             d_model,
             num_experts,
             bias=False
         )
 
-        # Multiple SwiGLU experts
+        # ====================================================
+        # Experts
+        # ====================================================
+
         self.experts = nn.ModuleList([
             SwiGLUFFN(
                 d_model=d_model,
@@ -39,74 +45,109 @@ class MoEFNN(nn.Module):
         # x:
         # (B, T, d_model)
 
-        # -----------------------------------------
-        # 1. Router scores
-        # -----------------------------------------
+        # ====================================================
+        # 1. Router
+        # ====================================================
 
-        router_logits = self.router(x)
+        with torch.profiler.record_function(
+            "moe_router"
+        ):
 
-        # (B, T, num_experts)
+            router_logits = self.router(x)
 
-        # -----------------------------------------
-        # 2. Convert scores to probabilities
-        # -----------------------------------------
+            router_probs = torch.softmax(
+                router_logits,
+                dim=-1
+            )
 
-        router_probs = torch.softmax(
-            router_logits,
-            dim=-1
-        )
+            top_probs, top_indices = torch.topk(
+                router_probs,
+                self.top_k,
+                dim=-1
+            )
 
-        # -----------------------------------------
-        # 3. Select top-k experts
-        # -----------------------------------------
+            # Normalize selected probabilities
 
-        top_probs, top_indices = torch.topk(
-            router_probs,
-            self.top_k,
-            dim=-1
-        )
+            top_probs = (
+                top_probs
+                /
+                top_probs.sum(
+                    dim=-1,
+                    keepdim=True
+                )
+            )
 
-        # Normalize selected probabilities
-        top_probs = top_probs / top_probs.sum(
-            dim=-1,
-            keepdim=True
-        )
-
-        # -----------------------------------------
-        # 4. Run selected experts
-        # -----------------------------------------
+        # ====================================================
+        # 2. Expert computation + combination
+        # ====================================================
 
         output = torch.zeros_like(x)
 
-        for expert_id, expert in enumerate(self.experts):
+        with torch.profiler.record_function(
+            "moe_experts"
+        ):
 
-            # Find tokens routed to this expert
-            mask = top_indices == expert_id
+            for expert_id, expert in enumerate(
+                self.experts
+            ):
 
-            if not mask.any():
-                continue
+                # --------------------------------------------
+                # Find tokens assigned to this expert
+                # --------------------------------------------
 
-            expert_output = expert(x)
+                mask = (
+                    top_indices == expert_id
+                )
 
-            # Weight expert output
-            for k in range(self.top_k):
+                if not mask.any():
+                    continue
 
-                selected = mask[..., k]
+                # --------------------------------------------
+                # Run expert
+                #
+                # NOTE:
+                # We intentionally keep the original
+                # Assignment 1 implementation unchanged.
+                # --------------------------------------------
 
-                if selected.any():
+                expert_output = expert(x)
 
-                    output[selected] += (
-                        top_probs[..., k][selected, None]
-                        * expert_output[selected]
-                    )
+                # --------------------------------------------
+                # Combine expert outputs
+                # --------------------------------------------
+
+                for k in range(self.top_k):
+
+                    selected = mask[..., k]
+
+                    if selected.any():
+
+                        output[selected] += (
+
+                            top_probs[..., k][
+                                selected,
+                                None
+                            ]
+
+                            *
+
+                            expert_output[
+                                selected
+                            ]
+                        )
 
         return output
 
+
+# ============================================================
+# Test
+# ============================================================
 
 if __name__ == "__main__":
 
     B = 2
     T = 5
+
     d_model = 8
     d_ff = 32
 
@@ -119,7 +160,7 @@ if __name__ == "__main__":
         d_model
     )
 
-    moe = MoEFFN(
+    moe = MoEFNN(
         d_model=d_model,
         d_ff=d_ff,
         num_experts=num_experts,

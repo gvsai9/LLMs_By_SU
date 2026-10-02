@@ -9,6 +9,12 @@ from data.dataset import create_batch
 from transformer.transformer_lm import TransformerLM
 
 
+from torch.profiler import (
+    profile,
+    record_function,
+    ProfilerActivity,
+    schedule,
+)
 # ============================================================
 # Configuration
 # ============================================================
@@ -30,10 +36,10 @@ BLOCK_SIZE = 128
 BATCH_SIZE = 8
 
 LEARNING_RATE = 3e-4
-NUM_STEPS = 10000
+NUM_STEPS = 200
 
 CHECKPOINT_DIR = "checkpoints"
-SAVE_EVERY = 1000
+SAVE_EVERY = 20
 
 LOG_EVERY = 10
 
@@ -314,8 +320,113 @@ for step in range(NUM_STEPS):
         print(
             f"Checkpoint saved: {checkpoint_path}"
         )
+# ============================================================
+# Profiling
+# ============================================================
 
+def profile_training(
+    model,
+    data,
+    batch_size,
+    block_size,
+    num_steps=10,
+):
+    model.train()
 
+    optimizer.zero_grad(set_to_none=True)
+
+    print()
+    print("=" * 60)
+    print("PROFILING")
+    print("=" * 60)
+
+    activities = [
+        ProfilerActivity.CPU,
+    ]
+
+    if DEVICE == "cuda":
+        activities.append(
+            ProfilerActivity.CUDA
+        )
+
+    with profile(
+        activities=activities,
+
+        schedule=schedule(
+            wait=2,
+            warmup=2,
+            active=6,
+            repeat=1,
+        ),
+
+        record_shapes=True,
+        profile_memory=True,
+        with_stack=True,
+
+        on_trace_ready=lambda prof:
+            prof.export_chrome_trace(
+                "profile_trace.json"
+            ),
+    ) as prof:
+
+        for step in range(num_steps):
+
+            inputs, targets = create_batch(
+                data,
+                batch_size=batch_size,
+                block_size=block_size,
+            )
+
+            optimizer.zero_grad(
+                set_to_none=True
+            )
+
+            with record_function(
+                "forward_pass"
+            ):
+                logits = model(inputs)
+
+            with record_function(
+                "loss"
+            ):
+                loss = loss_fn(
+                    logits.reshape(
+                        -1,
+                        vocab_size
+                    ),
+                    targets.reshape(-1),
+                )
+
+            with record_function(
+                "backward_pass"
+            ):
+                loss.backward()
+
+            with record_function(
+                "optimizer_step"
+            ):
+                optimizer.step()
+
+            prof.step()
+
+    print()
+    print("Profiler results:")
+    print()
+
+    print(
+        prof.key_averages().table(
+            sort_by="cuda_time_total"
+            if DEVICE == "cuda"
+            else "cpu_time_total",
+            row_limit=30,
+        )
+    )
+
+    print()
+    print(
+        "Chrome trace saved to: "
+        "profile_trace.json"
+    )
 # ============================================================
 # Final checkpoint
 # ============================================================
@@ -341,3 +452,11 @@ print("TRAINING COMPLETE")
 print("=" * 60)
 print("Final checkpoint:", final_checkpoint_path)
 print("Final loss      :", loss.item())
+
+profile_training(
+    model,
+    train_data,
+    batch_size=BATCH_SIZE,
+    block_size=BLOCK_SIZE,
+    num_steps=10,
+)
